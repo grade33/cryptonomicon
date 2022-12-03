@@ -1,4 +1,6 @@
 <script>
+import { subscribeTicker, unSubscribeTicker } from './api';
+
 export default {
   data() {
     return {
@@ -18,25 +20,33 @@ export default {
   },
 
   created() {
-    const storageTickerList = JSON.parse(localStorage.getItem('tickerList'));
-    if (storageTickerList) {
-      this.tickerList = storageTickerList;
-      this.tickerList.forEach((t) => this.subscribeToUpdates(t));
-    }
+    const storageTickerList =
+      JSON.parse(localStorage.getItem('tickerList')) || [];
+    this.tickerList = storageTickerList;
+
+    this.tickerList.forEach((t) => {
+      subscribeTicker(t.name, (newPrice) => {
+        this.updateTickers(t.name, newPrice);
+      });
+    });
 
     const windowData = Object.fromEntries(
       new URL(window.location).searchParams.entries()
     );
-    if (windowData.filter) this.filterValue = windowData.filter;
-    if (windowData.page) this.page = windowData.page;
+    const VALID_KEYS = ['filter', 'page'];
+    VALID_KEYS.forEach((key) => {
+      if (windowData[key]) {
+        this[key] = windowData[key];
+      }
+    });
   },
 
   async mounted() {
     const resp = await fetch(
       'https://min-api.cryptocompare.com/data/all/coinlist?summary=true'
     );
-    const data = (await resp.json()).Data;
-    this.tickerData = Object.keys(data);
+    const rawTickerData = (await resp.json()).Data;
+    this.tickerData = Object.keys(rawTickerData);
 
     this.pageLoading = false;
   },
@@ -65,7 +75,8 @@ export default {
       let i = 1;
       return this.tickerData.filter((tName) => {
         if (i < 5 && tName.includes(this.tickerValue)) {
-          return ++i;
+          i++;
+          return true;
         }
       });
     },
@@ -101,9 +112,12 @@ export default {
     normalizedGraph() {
       const minValue = Math.min(...this.graph);
       const maxValue = Math.max(...this.graph);
-      return this.graph.map(
-        (price) => 5 + ((price - minValue) * 95) / (maxValue - minValue)
-      );
+
+      return this.graph.map((price) => {
+        return minValue === maxValue
+          ? 50
+          : 5 + ((price - minValue) * 95) / (maxValue - minValue);
+      });
     },
   },
 
@@ -112,16 +126,17 @@ export default {
       localStorage.setItem('tickerList', JSON.stringify(this.tickerList));
     },
 
-    filterValue() {
-      this.page = 1;
-    },
-
     pageStateOptions({ page, filter }) {
+      const filterOption = filter ? `&filter=${filter}` : '';
+      const pageOption = `?page=${page}`;
       window.history.pushState(
         null,
         'cryptonomicon',
-        `${window.location.pathname}?page=${page}&filter=${filter}`
+        `${window.location.pathname}${pageOption}${filterOption}`
       );
+    },
+    filterValue() {
+      this.page = 1;
     },
 
     paginationTickerList() {
@@ -129,52 +144,56 @@ export default {
         this.page--;
       }
     },
+
+    selectedTicker(newValue, oldValue) {
+      if (newValue === oldValue) return;
+      this.graph = [];
+    },
   },
 
   methods: {
-    addTickerFromHint(coin) {
-      this.tickerValue = coin;
-      setTimeout(() => {
-        this.addTicker();
-      }, 0);
+    addTickerFromHint(currency) {
+      this.tickerValue = currency;
+      this.addTicker();
     },
 
     addTicker() {
       if (this.showErr) return;
 
-      const newTicker = {
+      const currentTicker = {
         name: this.tickerValue,
         price: '-',
       };
-      this.tickerList = [...this.tickerList, newTicker];
+      this.tickerList = [...this.tickerList, currentTicker];
       this.tickerValue = '';
 
-      const currentTicker = this.tickerList[this.tickerList.length - 1];
-      this.subscribeToUpdates(currentTicker);
+      subscribeTicker(currentTicker.name, (newPrice) =>
+        this.updateTickers(currentTicker.name, newPrice)
+      );
     },
 
-    subscribeToUpdates(ticker) {
-      setInterval(async () => {
-        const resp = await fetch(
-          `https://min-api.cryptocompare.com/data/price?fsym=${ticker.name}&tsyms=USD&api_key=e390a8060a7fe7725490dce7417577c1d291d26e3c20e31509612f3d689f5d05`
-        );
-        const data = await resp.json();
+    updateTickers(tickerName, newPrice) {
+      this.tickerList.find((t) => {
+        t.name === tickerName ? (t.price = newPrice) : false;
+      });
+    },
 
-        ticker.price =
-          data.USD > 1 ? data.USD.toFixed(2) : data.USD.toPrecision(2);
-
-        if (ticker === this.selectedTicker) this.graph.push(data.USD);
-      }, 3000);
+    formatPrice(price) {
+      if (price === '-') return price;
+      price = Number(price);
+      return price > 1 ? price.toFixed(2) : price.toPrecision(2);
     },
 
     removeTicker(tickerToRemove) {
       this.tickerList = this.tickerList.filter((t) => t !== tickerToRemove);
-      if (this.selectedTicker === tickerToRemove) this.changeSel();
+      unSubscribeTicker(tickerToRemove.name);
+
+      if (this.selectedTicker === tickerToRemove)
+        this.changeSelectedTicker(null);
     },
 
-    changeSel(tickerToSel) {
+    changeSelectedTicker(tickerToSel) {
       this.selectedTicker = tickerToSel;
-      this.graph = [];
     },
   },
 };
@@ -218,6 +237,7 @@ export default {
               <input
                 v-model="tickerValueUpperCase"
                 @keydown.enter="addTicker"
+                autocomplete="off"
                 type="text"
                 name="wallet"
                 id="wallet"
@@ -265,7 +285,12 @@ export default {
       <template v-if="tickerList.length">
         <hr class="w-full border-t border-gray-600 my-4" />
         <div>
-          <input type="text" v-model="filterValueUpperCase" />
+          <input
+            v-model="filterValueUpperCase"
+            autocomplete="off"
+            type="text"
+            class="block pr-10 border-gray-300 text-gray-900 focus:outline-none focus:ring-gray-500 focus:border-gray-500 sm:text-sm rounded-md"
+          />
           <button
             @click="page--"
             :disabled="page <= 1"
@@ -292,7 +317,7 @@ export default {
             <div
               v-for="ticker in paginationTickerList"
               :key="ticker.name"
-              @click="changeSel(ticker)"
+              @click="changeSelectedTicker(ticker)"
               :class="{ 'border-purple-800': selectedTicker === ticker }"
               class="bg-white overflow-hidden shadow rounded-lg border-transparent border-4 border-solid cursor-pointer"
             >
@@ -301,7 +326,7 @@ export default {
                   {{ ticker.name }} - USD
                 </dt>
                 <dd class="mt-1 text-3xl font-semibold text-gray-900">
-                  {{ ticker.price }}
+                  {{ formatPrice(ticker.price) }}
                 </dd>
               </div>
               <div class="w-full border-t border-gray-200"></div>
@@ -342,7 +367,7 @@ export default {
           ></div>
         </div>
         <button
-          @click="changeSel(null)"
+          @click="changeSelectedTicker(null)"
           type="button"
           class="absolute top-0 right-0"
         >
