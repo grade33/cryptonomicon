@@ -163,6 +163,7 @@ export default {
       const currentTicker = {
         name: this.tickerValue,
         price: '-',
+        isValid: false,
       };
       this.tickerList = [...this.tickerList, currentTicker];
       this.tickerValue = '';
@@ -173,9 +174,12 @@ export default {
     },
 
     updateTickers(tickerName, newPrice) {
-      this.tickerList.find((t) => {
-        t.name === tickerName ? (t.price = newPrice) : false;
-      });
+      this.tickerList
+        .filter((t) => t.name === tickerName)
+        .forEach((t) => {
+          t.price = newPrice;
+          t.isValid = true;
+        });
     },
 
     formatPrice(price) {
@@ -318,7 +322,10 @@ export default {
               v-for="ticker in paginationTickerList"
               :key="ticker.name"
               @click="changeSelectedTicker(ticker)"
-              :class="{ 'border-purple-800': selectedTicker === ticker }"
+              :class="{
+                'border-purple-800': selectedTicker === ticker,
+                'bg-red-100': !ticker.isValid,
+              }"
               class="bg-white overflow-hidden shadow rounded-lg border-transparent border-4 border-solid cursor-pointer"
             >
               <div class="px-4 py-5 sm:p-6 text-center">
